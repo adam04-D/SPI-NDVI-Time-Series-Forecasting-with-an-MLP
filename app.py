@@ -10,6 +10,7 @@ except Exception as _e:
     # we'll fallback to plotly for plotting in this environment
 import plotly.express as px
 from typing import Optional, Tuple
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # --- 1. Configuration de la Page ---
 st.set_page_config(page_title="Prévision NDVI - Adam D.", layout="wide")
@@ -164,6 +165,74 @@ def _plot_line_with_fallback(index, series, title=None, y_label=None, color=None
         dfp = pd.DataFrame({series.name if hasattr(series, 'name') else 'y': series.values}, index=index)
         fig = px.line(dfp, x=dfp.index, y=dfp.columns[0], title=title, labels={dfp.columns[0]: y_label or ''})
         st.plotly_chart(fig, use_container_width=True)
+
+
+def compute_model_diagnostics(df_full: pd.DataFrame, model, scaler_X, scaler_Y, ndvi_col: str):
+    """Compute in-sample predictions and basic diagnostics.
+    Returns: dict(metrics), pd.Series(predicted), pd.Series(actual)
+    """
+    # Build features the same way as get_prediction but for all rows
+    df_features = pd.DataFrame(index=df_full.index)
+    df_features['X_ndvi_lag1'] = df_full[ndvi_col].shift(1)
+    # prefer spi_3 names
+    spi3 = 'spi_3' if 'spi_3' in df_full.columns else ('spi3' if 'spi3' in df_full.columns else None)
+    spi6 = 'spi_6' if 'spi_6' in df_full.columns else ('spi6' if 'spi6' in df_full.columns else None)
+    if spi3 is not None:
+        df_features['X_spi3_lag1'] = df_full[spi3].shift(1)
+        df_features['X_spi3_lag2'] = df_full[spi3].shift(2)
+    else:
+        df_features['X_spi3_lag1'] = np.nan
+        df_features['X_spi3_lag2'] = np.nan
+    if spi6 is not None:
+        df_features['X_spi6_lag3'] = df_full[spi6].shift(3)
+    else:
+        df_features['X_spi6_lag3'] = np.nan
+
+    # align to scaler expected features if available
+    try:
+        if hasattr(scaler_X, 'feature_names_in_'):
+            expected = list(scaler_X.feature_names_in_)
+            for col in expected:
+                if col not in df_features.columns:
+                    df_features.loc[:, col] = np.nan
+            df_features = df_features[expected]
+    except Exception:
+        pass
+
+    # drop rows with NaNs in features or target
+    df_comb = pd.concat([df_features, df_full[[ndvi_col]]], axis=1)
+    df_comb = df_comb.dropna()
+    if df_comb.empty:
+        return None, None, None
+
+    X = df_comb.iloc[:, :-1]
+    y = df_comb[ndvi_col]
+
+    X_scaled = scaler_X.transform(X)
+    y_pred_scaled = model.predict(X_scaled, verbose=0)
+    y_pred = scaler_Y.inverse_transform(y_pred_scaled).reshape(-1)
+    y_actual = y.values.reshape(-1)
+
+    mse = mean_squared_error(y_actual, y_pred)
+    rmse = float(np.sqrt(mse))
+    mae = float(mean_absolute_error(y_actual, y_pred))
+    r2 = float(r2_score(y_actual, y_pred))
+    # MAPE, guard divide by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mape = float(np.nanmean(np.abs((y_actual - y_pred) / np.where(np.abs(y_actual) < 1e-9, np.nan, y_actual))) * 100)
+
+    metrics = {
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'mape_percent': mape,
+        'n_samples': len(y_actual)
+    }
+
+    predicted_series = pd.Series(y_pred, index=df_comb.index, name='predicted_ndvi')
+    actual_series = pd.Series(y_actual, index=df_comb.index, name='actual_ndvi')
+
+    return metrics, predicted_series, actual_series
 
 
 # --- 4. Exécution de l'Application (Dashboard) ---
@@ -352,6 +421,79 @@ try:
                 fig_pl = px.line(df_hist, x=df_hist.index, y='NDVI', title='NDVI : Historique et Prévision')
                 fig_pl.add_scatter(x=prediction_point.index, y=prediction_point.values, mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Prévision')
                 st.plotly_chart(fig_pl, use_container_width=True)
+
+            # --- Diagnostics: in-sample predictions and metrics ---
+            try:
+                diag = compute_model_diagnostics(df_full, model, scaler_X, scaler_Y, ndvi_col)
+                if diag is not None and diag[0] is not None:
+                    metrics, pred_series, actual_series = diag
+                    with st.expander('🔍 Diagnostics du Modèle & Verdict (in-sample)'):
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric('RMSE', f"{metrics['rmse']:.4f}")
+                        m2.metric('MAE', f"{metrics['mae']:.4f}")
+                        m3.metric('R²', f"{metrics['r2']:.3f}")
+                        m4.metric('MAPE (%)', f"{metrics['mape_percent']:.2f}")
+
+                        # brief interpretation
+                        st.markdown('**Interprétation rapide :**')
+                        interp = []
+                        # RMSE benchmarks for NDVI (range ~0..1): thresholds are heuristic
+                        if metrics['rmse'] < 0.02:
+                            interp.append('- RMSE faible : bonne précision du modèle sur les données historiques.')
+                        elif metrics['rmse'] < 0.05:
+                            interp.append('- RMSE modéré : performance acceptable, surveiller erreurs saisonnières.')
+                        else:
+                            interp.append('- RMSE élevé : le modèle a des erreurs significatives; examiner les features et la pré-traitement.')
+                        if metrics['r2'] > 0.7:
+                            interp.append('- R² élevé : le modèle explique bien la variance observée.')
+                        elif metrics['r2'] > 0.4:
+                            interp.append('- R² moyen : le modèle capture partiellement la tendance.')
+                        else:
+                            interp.append('- R² faible : le modèle n\'explique pas bien la variance; reconsidérer la structure ou les données.')
+                        st.write('\n'.join(interp))
+
+                        # Plots: actual vs predicted time series
+                        st.subheader('Série : Observé vs Prédit (In-sample)')
+                        df_plot = pd.concat([actual_series, pred_series], axis=1)
+                        df_plot.columns = ['observed', 'predicted']
+                        if plt is not None:
+                            fig_ts, ax_ts = plt.subplots(figsize=(14,5))
+                            ax_ts.plot(df_plot.index, df_plot['observed'], label='Observé', color='tab:green')
+                            ax_ts.plot(df_plot.index, df_plot['predicted'], label='Prévu', color='tab:red', alpha=0.8)
+                            ax_ts.set_title('Observé vs Prévu (In-sample)')
+                            ax_ts.legend()
+                            ax_ts.grid(True)
+                            st.pyplot(fig_ts)
+                        else:
+                            fig_px = px.line(df_plot.reset_index(), x='index', y=['observed','predicted'], labels={'index':'date'})
+                            st.plotly_chart(fig_px, use_container_width=True)
+
+                        # Scatter plot and residuals
+                        st.subheader('Scatter : Observé vs Prévu')
+                        df_sc = df_plot.dropna().reset_index()
+                        fig_sc = px.scatter(df_sc, x='observed', y='predicted', trendline='ols', height=400)
+                        fig_sc.add_shape(type='line', x0=df_sc['observed'].min(), x1=df_sc['observed'].max(), y0=df_sc['observed'].min(), y1=df_sc['observed'].max(), line=dict(dash='dash'))
+                        st.plotly_chart(fig_sc, use_container_width=True)
+
+                        st.subheader('Distribution des résidus (observé - prédit)')
+                        residuals = df_plot['observed'] - df_plot['predicted']
+                        if plt is not None:
+                            fig_r, ax_r = plt.subplots(figsize=(10,4))
+                            ax_r.hist(residuals.dropna(), bins=40, color='grey', alpha=0.7)
+                            ax_r.set_title('Histogramme des résidus')
+                            st.pyplot(fig_r)
+                        else:
+                            fig_hr = px.histogram(residuals.reset_index(), x=0, nbins=40, title='Histogramme des résidus')
+                            st.plotly_chart(fig_hr, use_container_width=True)
+
+                        # allow download of diagnostics
+                        df_diag_out = df_plot.reset_index()
+                        csv_diag = df_diag_out.to_csv(index=False)
+                        st.download_button('Télécharger diagnostics (CSV)', csv_diag, file_name='model_diagnostics.csv')
+                else:
+                    st.info('Pas assez de données propres pour calculer les diagnostics du modèle.')
+            except Exception as e:
+                st.warning(f"Impossible de calculer les diagnostics détaillés: {e}")
 
         except Exception as e:
             st.error(f"Erreur lors de la génération de la prédiction : {e}")
