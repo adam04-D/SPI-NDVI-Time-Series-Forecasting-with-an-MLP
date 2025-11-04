@@ -263,6 +263,11 @@ try:
     uploaded_model = st.sidebar.file_uploader("Modèle Keras (.keras/.h5)", type=['keras','h5','hdf5'], help='Téléversez un fichier .keras ou .h5 entraîné si vous ne souhaitez pas placer les fichiers sur le disque.')
     uploaded_scaler_x = st.sidebar.file_uploader("Scaler X (pickle)", type=['pkl'], help='Scaler des features (scaler_x.pkl)')
     uploaded_scaler_y = st.sidebar.file_uploader("Scaler Y (pickle)", type=['pkl'], help='Scaler de la cible (scaler_y.pkl)')
+    # Training history uploader (CSV with columns 'loss' and optionally 'val_loss' OR Keras history JSON)
+    uploaded_history = st.sidebar.file_uploader("Historique d'entraînement (CSV/JSON)", type=['csv','json'], help='Fichier history.history() exporté ou CSV avec colonnes loss, val_loss')
+    # GeoJSON visualization toggle
+    st.sidebar.markdown('---')
+    show_geo = st.sidebar.checkbox('Afficher la zone GeoJSON (Béni Mellal-Khénifra)', value=True)
 
     def _load_uploaded_assets(uploaded_model, uploaded_scaler_x, uploaded_scaler_y):
         """If user uploaded assets, save them to disk temporarily and attempt to load them.
@@ -340,6 +345,39 @@ try:
             if sy_u is not None:
                 scaler_Y = sy_u
                 st.success('Scaler Y téléversé chargé et utilisé.')
+
+        # If training history uploaded, parse and show simple loss/val_loss plot
+        def _plot_training_history(uploaded_file):
+            try:
+                import json
+                if uploaded_file.name.lower().endswith('.csv'):
+                    dfh = pd.read_csv(uploaded_file)
+                else:
+                    # assume JSON (keras.history.history dict)
+                    raw = uploaded_file.getvalue().decode('utf-8')
+                    j = json.loads(raw)
+                    # j may be {'loss': [...], 'val_loss': [...]} or history.history
+                    if 'history' in j and isinstance(j['history'], dict):
+                        h = j['history']
+                    else:
+                        h = j
+                    dfh = pd.DataFrame(h)
+
+                # prefer columns named loss and val_loss
+                cols = [c for c in ['loss','val_loss'] if c in dfh.columns]
+                if not cols:
+                    st.info('Le fichier d\'historique ne contient pas loss/val_loss attendus.')
+                    return
+
+                st.subheader("Historique d'entraînement")
+                # use plotly for training history for interactivity
+                fig = px.line(dfh[cols].reset_index().rename(columns={'index':'epoch'}), x='epoch', y=cols, labels={'value':'loss','variable':'courbe'})
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Impossible de lire l'historique d'entraînement : {e}")
+
+        if uploaded_history is not None:
+            _plot_training_history(uploaded_history)
 
     # Top summary metrics
     st.header("📊 Résumé")
@@ -511,6 +549,37 @@ try:
         st.write('Colonnes détectées :', list(df_full.columns))
         st.write('Colonne NDVI utilisée :', ndvi_col)
         st.write('Taille du jeu de données :', df_full.shape)
+
+    # --- GeoJSON visualization ---
+    if show_geo:
+        st.subheader('Carte : Zone de Béni Mellal-Khénifra')
+        geo_path = 'beni_mellal_khenifra.geojson'
+        if os.path.exists(geo_path):
+            try:
+                import json
+                try:
+                    import geopandas as gpd
+                    gdf = gpd.read_file(geo_path)
+                    # show bounding box and centroid points
+                    try:
+                        gdf_centroids = gdf.copy()
+                        gdf_centroids['lon'] = gdf_centroids.geometry.centroid.x
+                        gdf_centroids['lat'] = gdf_centroids.geometry.centroid.y
+                        st.map(gdf_centroids[['lat','lon']].dropna())
+                    except Exception:
+                        st.write(gdf)
+                    st.write('GeoJSON chargé via geopandas.')
+                except Exception:
+                    # fallback: show raw geojson or simple centroid
+                    with open(geo_path, 'r', encoding='utf-8') as f:
+                        gj = json.load(f)
+                    st.write('GeoJSON (raw):')
+                    st.json(gj)
+                    st.info('Pour une carte interactive, installez geopandas ou pydeck sur l\'environnement de déploiement.')
+            except Exception as e:
+                st.warning(f"Impossible d'afficher le GeoJSON : {e}")
+        else:
+            st.info(f"Fichier GeoJSON introuvable: {geo_path}")
 
 except Exception as e:
     st.error(f"Une erreur inattendue est survenue : {e}")
