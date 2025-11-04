@@ -1,0 +1,9 @@
+streamlit>=1.10
+pandas
+numpy
+matplotlib
+scikit-learn
+plotly
+# Optional: TensorFlow is heavy and may fail to install on some hosted platforms.
+# If you need model prediction on Streamlit Cloud, uncomment the following line and test.
+# tensorflow==2.18.0

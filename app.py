@@ -2,8 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-import matplotlib.pyplot as plt
 import os
+try:
+    import matplotlib.pyplot as plt
+except Exception as _e:
+    plt = None
+    # we'll fallback to plotly for plotting in this environment
+import plotly.express as px
 from typing import Optional, Tuple
 
 # --- 1. Configuration de la Page ---
@@ -141,6 +146,26 @@ def get_prediction(df_full, model, scaler_X, scaler_Y):
     
     return last_known_data, predicted_ndvi, ndvi_col
 
+
+def _plot_line_with_fallback(index, series, title=None, y_label=None, color=None):
+    """Plot a single time series using matplotlib if available, else plotly."""
+    if plt is not None:
+        fig, ax = plt.subplots(figsize=(14, 5))
+        ax.plot(index, series, label=series.name if hasattr(series, 'name') else None, color=color)
+        if title:
+            ax.set_title(title)
+        if y_label:
+            ax.set_ylabel(y_label)
+        ax.set_xlabel('Date')
+        ax.grid(True)
+        ax.legend()
+        st.pyplot(fig)
+    else:
+        dfp = pd.DataFrame({series.name if hasattr(series, 'name') else 'y': series.values}, index=index)
+        fig = px.line(dfp, x=dfp.index, y=dfp.columns[0], title=title, labels={dfp.columns[0]: y_label or ''})
+        st.plotly_chart(fig, use_container_width=True)
+
+
 # --- 4. Exécution de l'Application (Dashboard) ---
 try:
     # Charger les données et le modèle
@@ -268,36 +293,31 @@ try:
 
     # --- Time series NDVI ---
     st.subheader("Série Temporelle NDVI")
-    fig, ax = plt.subplots(figsize=(14, 5))
-    ax.plot(df_view.index, df_view[ndvi_col], label='NDVI', color='tab:green')
-    ax.set_ylabel('NDVI')
-    ax.set_xlabel('Date')
-    ax.grid(True)
-    ax.legend()
-    st.pyplot(fig)
+    _plot_line_with_fallback(df_view.index, df_view[ndvi_col], title='Série Temporelle NDVI', y_label='NDVI', color='tab:green')
 
     # --- SPI plots if present ---
     spi_cols = [c for c in ['spi_3', 'spi3', 'spi_6', 'spi6', 'spi_12'] if c in df_view.columns]
     if spi_cols:
         st.subheader("Indices SPI")
-        fig2, axes = plt.subplots(len(spi_cols), 1, figsize=(14, 3 * len(spi_cols)), sharex=True)
-        if len(spi_cols) == 1:
-            axes = [axes]
-        for ax, col in zip(axes, spi_cols):
-            ax.plot(df_view.index, df_view[col], label=col, color='tab:blue')
-            ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
-            ax.set_ylabel(col)
-            ax.legend()
-        st.pyplot(fig2)
+        # If matplotlib exists, plot stacked subplots; else plot each series separately with Plotly
+        if plt is not None:
+            fig2, axes = plt.subplots(len(spi_cols), 1, figsize=(14, 3 * len(spi_cols)), sharex=True)
+            if len(spi_cols) == 1:
+                axes = [axes]
+            for ax, col in zip(axes, spi_cols):
+                ax.plot(df_view.index, df_view[col], label=col, color='tab:blue')
+                ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
+                ax.set_ylabel(col)
+                ax.legend()
+            st.pyplot(fig2)
+        else:
+            for col in spi_cols:
+                _plot_line_with_fallback(df_view.index, df_view[col], title=f'SPI: {col}', y_label=col, color='tab:blue')
 
     # --- Precipitation ---
     if 'precip_median' in df_view.columns:
         st.subheader('Précipitation (médiane)')
-        fig3, ax3 = plt.subplots(figsize=(14, 3))
-        ax3.plot(df_view.index, df_view['precip_median'], color='tab:purple')
-        ax3.set_ylabel('Précipitation (mm)')
-        ax3.grid(True)
-        st.pyplot(fig3)
+    _plot_line_with_fallback(df_view.index, df_view['precip_median'], title='Précipitation (médiane)', y_label='Précipitation (mm)', color='tab:purple')
 
     # --- Prediction panel ---
     if model is not None and scaler_X is not None and scaler_Y is not None:
@@ -317,14 +337,21 @@ try:
             st.subheader('Historique + Prévision (36 mois)')
             recent_history = df_full[ndvi_col].iloc[-36:].copy()
             prediction_point = pd.Series([predicted_ndvi], index=[future_date])
-            fig4, ax4 = plt.subplots(figsize=(14, 5))
-            ax4.plot(recent_history.index, recent_history, label='Historique', color='tab:green')
-            ax4.plot(prediction_point.index, prediction_point, 'r*', markersize=14, label='Prévision')
-            ax4.set_title('NDVI : Historique et Prévision')
-            ax4.set_ylabel('NDVI')
-            ax4.grid(True)
-            ax4.legend()
-            st.pyplot(fig4)
+            if plt is not None:
+                fig4, ax4 = plt.subplots(figsize=(14, 5))
+                ax4.plot(recent_history.index, recent_history, label='Historique', color='tab:green')
+                ax4.plot(prediction_point.index, prediction_point, 'r*', markersize=14, label='Prévision')
+                ax4.set_title('NDVI : Historique et Prévision')
+                ax4.set_ylabel('NDVI')
+                ax4.grid(True)
+                ax4.legend()
+                st.pyplot(fig4)
+            else:
+                # Use plotly to combine history and point
+                df_hist = pd.DataFrame({ 'NDVI': recent_history.values }, index=recent_history.index)
+                fig_pl = px.line(df_hist, x=df_hist.index, y='NDVI', title='NDVI : Historique et Prévision')
+                fig_pl.add_scatter(x=prediction_point.index, y=prediction_point.values, mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Prévision')
+                st.plotly_chart(fig_pl, use_container_width=True)
 
         except Exception as e:
             st.error(f"Erreur lors de la génération de la prédiction : {e}")
