@@ -18,6 +18,26 @@ st.title("🚀 Tableau de Bord de Prévision du NDVI")
 st.write("Projet de stage : Prévision de la santé de la végétation (NDVI) à l'aide d'un réseau de neurones MLP, basé sur la sécheresse (SPI).")
 st.write("---")
 
+# UI style and captions
+COLORS = {
+    'observed': '#2ca02c',
+    'predicted': '#d62728',
+    'ndvi': '#2ca02c',
+    'spi': '#1f77b4',
+    'precip': '#9467bd',
+}
+
+CAPTIONS = {
+    'ndvi': "Courbe NDVI mensuelle (composite). Valeurs proches de 1 indiquent une végétation dense, proches de 0 une végétation clairsemée.",
+    'spi': "Indice SPI : valeurs négatives = conditions sèches, positives = excès d'eau. Seuils ±1.5 indiquent événements importants.",
+    'precip': "Précipitation médiane mensuelle en mm — utile pour comparer la réponse de la végétation.",
+    'history': "Historique d'entraînement : loss / val_loss par epoch — la validation permet de détecter l'overfitting.",
+    'forecast': "Historique récent et point de prévision (étoile rouge). La barre d'erreur montre l'incertitude estimée (±RMSE in-sample).",
+    'obs_vs_pred': "Comparaison observé vs prédit sur l'échantillon d'entraînement — idéalement les courbes se recouvrent.",
+    'scatter': "Scatter observé vs prédit — la ligne en pointillés représente y=x. L'écart montre l'erreur locale.",
+    'residuals': "Distribution des résidus (observé - prédit). Une distribution centrée sur 0 indique des erreurs non biaisées.",
+}
+
 # --- 2. Fonctions de Chargement (Mises en cache) ---
 # @st.cache_resource garantit que nous ne chargeons le modèle qu'une seule fois
 @st.cache_resource
@@ -319,6 +339,7 @@ try:
             # use plotly for training history for interactivity
             fig = px.line(dfh[cols].reset_index().rename(columns={'index':'epoch'}), x='epoch', y=cols, labels={'value':'loss','variable':'courbe'})
             st.plotly_chart(fig, use_container_width=True)
+            st.caption(CAPTIONS['history'])
         except Exception as e:
             st.warning(f"Impossible de lire l'historique d'entraînement : {e}")
 
@@ -371,7 +392,18 @@ try:
             return None, None, None
     min_date = df_full.index.min().date()
     max_date = df_full.index.max().date()
+    # Quick presets for the period view (makes navigation faster)
+    preset = st.sidebar.selectbox('Aperçu rapide', options=['Personnalisé', '12 mois', '36 mois', 'Tout'], index=0)
     start_date, end_date = st.sidebar.date_input("Période", value=[min_date, max_date], min_value=min_date, max_value=max_date)
+    if preset != 'Personnalisé':
+        if preset == '12 mois':
+            end_date = max_date
+            start_date = (pd.to_datetime(end_date) - pd.DateOffset(months=12)).date()
+        elif preset == '36 mois':
+            end_date = max_date
+            start_date = (pd.to_datetime(end_date) - pd.DateOffset(months=36)).date()
+        else:
+            start_date, end_date = min_date, max_date
     if isinstance(start_date, list) or isinstance(start_date, tuple):
         # streamlit may return a list if user picks range differently
         start_date, end_date = start_date[0], start_date[-1]
@@ -436,7 +468,8 @@ try:
 
     # --- Time series NDVI ---
     st.subheader("Série Temporelle NDVI")
-    _plot_line_with_fallback(df_view.index, df_view[ndvi_col], title='Série Temporelle NDVI', y_label='NDVI', color='tab:green')
+    _plot_line_with_fallback(df_view.index, df_view[ndvi_col], title='Série Temporelle NDVI', y_label='NDVI', color=COLORS['ndvi'])
+    st.caption(CAPTIONS['ndvi'])
 
     # --- SPI plots if present ---
     spi_cols = [c for c in ['spi_3', 'spi3', 'spi_6', 'spi6', 'spi_12'] if c in df_view.columns]
@@ -456,7 +489,8 @@ try:
             st.caption('Indices SPI — Indicateurs standards de la sécheresse. Les valeurs négatives indiquent conditions plus sèches que la normale, positives indiquent conditions plus humides.')
         else:
             for col in spi_cols:
-                _plot_line_with_fallback(df_view.index, df_view[col], title=f'SPI: {col}', y_label=col, color='tab:blue')
+                _plot_line_with_fallback(df_view.index, df_view[col], title=f'SPI: {col}', y_label=col, color=COLORS['spi'])
+            st.caption(CAPTIONS['spi'])
 
     # --- Precipitation ---
     if 'precip_median' in df_view.columns:
@@ -469,6 +503,16 @@ try:
         st.header('🔮 Prédiction (modèle chargé)')
         try:
             last_known_data, predicted_ndvi, _ = get_prediction(df_full, model, scaler_X, scaler_Y)
+            # Compute in-sample diagnostics early to estimate an uncertainty (RMSE) for the forecast point
+            try:
+                diag_early = compute_model_diagnostics(df_full, model, scaler_X, scaler_Y, ndvi_col)
+                if diag_early is not None and diag_early[0] is not None:
+                    early_metrics = diag_early[0]
+                    rmse_ci = early_metrics.get('rmse', None)
+                else:
+                    rmse_ci = None
+            except Exception:
+                rmse_ci = None
             last_date = last_known_data.index[0]
             future_date = last_date + pd.DateOffset(months=1)
 
@@ -484,21 +528,28 @@ try:
             prediction_point = pd.Series([predicted_ndvi], index=[future_date])
             if plt is not None:
                 fig4, ax4 = plt.subplots(figsize=(14, 5))
-                ax4.plot(recent_history.index, recent_history, label='Historique', color='tab:green')
-                ax4.plot(prediction_point.index, prediction_point, 'r*', markersize=14, label='Prévision')
+                ax4.plot(recent_history.index, recent_history, label='Historique', color=COLORS['ndvi'])
+                # plot forecast point and optional RMSE-based error bar
+                if rmse_ci is not None:
+                    ax4.errorbar(prediction_point.index, prediction_point.values, yerr=rmse_ci, fmt='r*', capsize=6, label='Prévision (±RMSE)')
+                else:
+                    ax4.plot(prediction_point.index, prediction_point, 'r*', markersize=14, label='Prévision')
                 ax4.set_title('NDVI : Historique et Prévision')
                 ax4.set_ylabel('NDVI')
                 ax4.grid(True)
                 ax4.legend()
                 st.pyplot(fig4)
-                st.caption('Historique et prévision — point rouge représente la prévision du mois suivant basée sur le modèle chargé. Vérifiez l\'incertitude si le modèle a peu d\'échantillons.')
+                st.caption(CAPTIONS['forecast'])
             else:
                 # Use plotly to combine history and point
                 df_hist = pd.DataFrame({ 'NDVI': recent_history.values }, index=recent_history.index)
                 fig_pl = px.line(df_hist, x=df_hist.index, y='NDVI', title='NDVI : Historique et Prévision')
-                fig_pl.add_scatter(x=prediction_point.index, y=prediction_point.values, mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Prévision')
+                if rmse_ci is not None:
+                    fig_pl.add_scatter(x=prediction_point.index, y=prediction_point.values, mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Prévision', error_y=dict(type='data', array=[rmse_ci]))
+                else:
+                    fig_pl.add_scatter(x=prediction_point.index, y=prediction_point.values, mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Prévision')
                 st.plotly_chart(fig_pl, use_container_width=True)
-                st.caption('Historique et prévision — point rouge représente la prévision du mois suivant basée sur le modèle chargé. Vérifiez l\'incertitude si le modèle a peu d\'échantillons.')
+                st.caption(CAPTIONS['forecast'])
 
             # --- Diagnostics: in-sample predictions and metrics ---
             try:
