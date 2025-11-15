@@ -583,17 +583,7 @@ try:
     else:
         st.info('Modèle non chargé : la fonctionnalité de prédiction est désactivée. Placez les fichiers ndvi_model.keras, scaler_x.pkl et scaler_y.pkl dans le répertoire du projet et relancez l\'application.')
 
-    # --- Data table and download ---
-    st.subheader('Aperçu des Données')
-    st.dataframe(df_view.head(200))
-    csv = df_view.to_csv(index=True)
-    st.download_button('Télécharger les données filtrées (CSV)', csv, file_name='master_dataset_filtered.csv')
-
-    # Diagnostic panel
-    with st.expander('Diagnostics'):
-        st.write('Colonnes détectées :', list(df_full.columns))
-        st.write('Colonne NDVI utilisée :', ndvi_col)
-        st.write('Taille du jeu de données :', df_full.shape)
+    # (Data preview and small diagnostics panel removed per user request)
 
     # --- GeoJSON visualization ---
     if show_geo:
