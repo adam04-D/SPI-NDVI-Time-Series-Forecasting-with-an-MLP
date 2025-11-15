@@ -282,19 +282,9 @@ try:
 
     # --- Sidebar: filtres et options ---
     st.sidebar.header("Filtres")
-    # Option: prefer using local files present in the workspace (default)
-    use_local_files = st.sidebar.checkbox("Utiliser les fichiers locaux (aucun upload)", value=True, help="Si coché, l'application utilisera les fichiers présents dans le répertoire du projet (ndvi_model.keras, scaler_x.pkl, scaler_y.pkl, history.csv/json). Décochez pour téléverser vos propres fichiers.")
-    st.sidebar.markdown("---")
-    # Upload widgets are shown only when the user opts out of local files
+    # Use only files that exist in the project repository (no uploads allowed)
+    # This app assumes the model and scalers live in the repo (ndvi_model.keras, scaler_x.pkl, scaler_y.pkl)
     uploaded_model = uploaded_scaler_x = uploaded_scaler_y = uploaded_history = None
-    if not use_local_files:
-        st.sidebar.subheader("Charger un modèle (optionnel)")
-        uploaded_model = st.sidebar.file_uploader("Modèle Keras (.keras/.h5)", type=['keras','h5','hdf5'], help='Téléversez un fichier .keras ou .h5 entraîné si vous ne souhaitez pas placer les fichiers sur le disque.')
-        uploaded_scaler_x = st.sidebar.file_uploader("Scaler X (pickle)", type=['pkl'], help='Scaler des features (scaler_x.pkl)')
-        uploaded_scaler_y = st.sidebar.file_uploader("Scaler Y (pickle)", type=['pkl'], help='Scaler de la cible (scaler_y.pkl)')
-
-        # Training history uploader (CSV with columns 'loss' and optionally 'val_loss' OR Keras history JSON)
-        uploaded_history = st.sidebar.file_uploader("Historique d'entraînement (CSV/JSON)", type=['csv','json'], help='Fichier history.history() exporté ou CSV avec colonnes loss, val_loss')
     # GeoJSON visualization toggle
     st.sidebar.markdown('---')
     show_geo = st.sidebar.checkbox('Afficher la zone GeoJSON (Béni Mellal-Khénifra)', value=True)
@@ -343,53 +333,7 @@ try:
         except Exception as e:
             st.warning(f"Impossible de lire l'historique d'entraînement : {e}")
 
-    def _load_uploaded_assets(uploaded_model, uploaded_scaler_x, uploaded_scaler_y):
-        """If user uploaded assets, save them to disk temporarily and attempt to load them.
-        Returns (model, scaler_X, scaler_Y) or (None, None, None) on failure/absence.
-        """
-        if uploaded_model is None and uploaded_scaler_x is None and uploaded_scaler_y is None:
-            return None, None, None
-
-        tmp_model_path = None
-        tmp_x = None
-        tmp_y = None
-        try:
-            if uploaded_model is not None:
-                tmp_model_path = os.path.join(os.getcwd(), 'uploaded_ndvi_model.keras')
-                with open(tmp_model_path, 'wb') as f:
-                    f.write(uploaded_model.getbuffer())
-            if uploaded_scaler_x is not None:
-                tmp_x = os.path.join(os.getcwd(), 'uploaded_scaler_x.pkl')
-                with open(tmp_x, 'wb') as f:
-                    f.write(uploaded_scaler_x.getbuffer())
-            if uploaded_scaler_y is not None:
-                tmp_y = os.path.join(os.getcwd(), 'uploaded_scaler_y.pkl')
-                with open(tmp_y, 'wb') as f:
-                    f.write(uploaded_scaler_y.getbuffer())
-
-            # Try to load if tensorflow is available
-            try:
-                from tensorflow.keras.models import load_model as _load_model
-            except Exception as e:
-                st.warning(f"TensorFlow non disponible; impossible de charger le modèle téléversé: {e}")
-                return None, None, None
-
-            model_l = None
-            scaler_x_l = None
-            scaler_y_l = None
-            if tmp_model_path is not None:
-                model_l = _load_model(tmp_model_path)
-            if tmp_x is not None:
-                with open(tmp_x, 'rb') as f:
-                    scaler_x_l = pickle.load(f)
-            if tmp_y is not None:
-                with open(tmp_y, 'rb') as f:
-                    scaler_y_l = pickle.load(f)
-
-            return model_l, scaler_x_l, scaler_y_l
-        except Exception as e:
-            st.error(f"Échec du chargement des fichiers téléversés: {e}")
-            return None, None, None
+    # no upload helper: app will only load assets from disk via load_assets()
     min_date = df_full.index.min().date()
     max_date = df_full.index.max().date()
     # Quick presets for the period view (makes navigation faster)
@@ -415,37 +359,15 @@ try:
     # subset data for display
     df_view = df_full.loc[str(start_date):str(end_date)].copy()
 
-    # If user uploaded model/scalers, try to load and override the disk assets
-    uploaded_override = None
-    if uploaded_model is not None or uploaded_scaler_x is not None or uploaded_scaler_y is not None:
-        uploaded_override = _load_uploaded_assets(uploaded_model, uploaded_scaler_x, uploaded_scaler_y)
-        if uploaded_override is not None:
-            m_u, sx_u, sy_u = uploaded_override
-            if m_u is not None:
-                model = m_u
-                st.success('Modèle téléversé chargé et utilisé.')
-            if sx_u is not None:
-                scaler_X = sx_u
-                st.success('Scaler X téléversé chargé et utilisé.')
-            if sy_u is not None:
-                scaler_Y = sy_u
-                st.success('Scaler Y téléversé chargé et utilisé.')
-
-        # (previously the training-history helper was here; it's defined above so we can use local files too)
-    # After uploaded assets handling: decide how to show training history
-    if not use_local_files:
-        if uploaded_history is not None:
-            _plot_training_history(uploaded_history)
-    else:
-        # User chose to use local files. Try to find a training history on disk and plot it.
-        possible_history_files = ['history.csv','training_history.csv','history.json','training_history.json']
-        found = None
-        for p in possible_history_files:
-            if os.path.exists(p):
-                found = p
-                break
-        if found is not None:
-            _plot_training_history(found)
+    # No uploads allowed: try to find training history in the repository and plot it if present
+    possible_history_files = ['history.csv','training_history.csv','history.json','training_history.json']
+    found = None
+    for p in possible_history_files:
+        if os.path.exists(p):
+            found = p
+            break
+    if found is not None:
+        _plot_training_history(found)
 
     # Top summary metrics
     st.header("📊 Résumé")
