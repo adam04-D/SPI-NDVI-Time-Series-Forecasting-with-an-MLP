@@ -161,10 +161,15 @@ def _plot_line_with_fallback(index, series, title=None, y_label=None, color=None
         ax.grid(True)
         ax.legend()
         st.pyplot(fig)
+        # small caption area for context under the plot
+        if title:
+            st.caption(f"{title} — visualisation temporelle. Interprétez les tendances saisonnières et anomalies éventuelles.")
     else:
         dfp = pd.DataFrame({series.name if hasattr(series, 'name') else 'y': series.values}, index=index)
         fig = px.line(dfp, x=dfp.index, y=dfp.columns[0], title=title, labels={dfp.columns[0]: y_label or ''})
         st.plotly_chart(fig, use_container_width=True)
+        if title:
+            st.caption(f"{title} — visualisation temporelle. Interprétez les tendances saisonnières et anomalies éventuelles.")
 
 
 def compute_model_diagnostics(df_full: pd.DataFrame, model, scaler_X, scaler_Y, ndvi_col: str):
@@ -448,6 +453,7 @@ try:
                 ax.set_ylabel(col)
                 ax.legend()
             st.pyplot(fig2)
+            st.caption('Indices SPI — Indicateurs standards de la sécheresse. Les valeurs négatives indiquent conditions plus sèches que la normale, positives indiquent conditions plus humides.')
         else:
             for col in spi_cols:
                 _plot_line_with_fallback(df_view.index, df_view[col], title=f'SPI: {col}', y_label=col, color='tab:blue')
@@ -456,6 +462,7 @@ try:
     if 'precip_median' in df_view.columns:
         st.subheader('Précipitation (médiane)')
     _plot_line_with_fallback(df_view.index, df_view['precip_median'], title='Précipitation (médiane)', y_label='Précipitation (mm)', color='tab:purple')
+    st.caption('Précipitation médiane — valeurs mensuelles agrégées. Utilisez ceci pour relier les anomalies pluviométriques aux variations de NDVI.')
 
     # --- Prediction panel ---
     if model is not None and scaler_X is not None and scaler_Y is not None:
@@ -484,12 +491,14 @@ try:
                 ax4.grid(True)
                 ax4.legend()
                 st.pyplot(fig4)
+                st.caption('Historique et prévision — point rouge représente la prévision du mois suivant basée sur le modèle chargé. Vérifiez l\'incertitude si le modèle a peu d\'échantillons.')
             else:
                 # Use plotly to combine history and point
                 df_hist = pd.DataFrame({ 'NDVI': recent_history.values }, index=recent_history.index)
                 fig_pl = px.line(df_hist, x=df_hist.index, y='NDVI', title='NDVI : Historique et Prévision')
                 fig_pl.add_scatter(x=prediction_point.index, y=prediction_point.values, mode='markers', marker=dict(size=12, color='red', symbol='star'), name='Prévision')
                 st.plotly_chart(fig_pl, use_container_width=True)
+                st.caption('Historique et prévision — point rouge représente la prévision du mois suivant basée sur le modèle chargé. Vérifiez l\'incertitude si le modèle a peu d\'échantillons.')
 
             # --- Diagnostics: in-sample predictions and metrics ---
             try:
@@ -533,9 +542,11 @@ try:
                             ax_ts.legend()
                             ax_ts.grid(True)
                             st.pyplot(fig_ts)
+                            st.caption('Observé vs Prévu — série temporelle in-sample. Un fort décalage saisonnier peut indiquer que le modèle ne capture pas la saisonnalité.')
                         else:
                             fig_px = px.line(df_plot.reset_index(), x='index', y=['observed','predicted'], labels={'index':'date'})
                             st.plotly_chart(fig_px, use_container_width=True)
+                            st.caption('Observé vs Prévu — série temporelle in-sample. Un fort décalage saisonnier peut indiquer que le modèle ne capture pas la saisonnalité.')
 
                         # Scatter plot and residuals
                         st.subheader('Scatter : Observé vs Prévu')
@@ -543,6 +554,7 @@ try:
                         fig_sc = px.scatter(df_sc, x='observed', y='predicted', trendline='ols', height=400)
                         fig_sc.add_shape(type='line', x0=df_sc['observed'].min(), x1=df_sc['observed'].max(), y0=df_sc['observed'].min(), y1=df_sc['observed'].max(), line=dict(dash='dash'))
                         st.plotly_chart(fig_sc, use_container_width=True)
+                        st.caption('Scatter Observé vs Prévu — la ligne en pointillé est la diagonale idéale; l\'écart montre les biais et la dispersion des prédictions.')
 
                         st.subheader('Distribution des résidus (observé - prédit)')
                         residuals = df_plot['observed'] - df_plot['predicted']
@@ -551,9 +563,11 @@ try:
                             ax_r.hist(residuals.dropna(), bins=40, color='grey', alpha=0.7)
                             ax_r.set_title('Histogramme des résidus')
                             st.pyplot(fig_r)
+                            st.caption('Distribution des résidus — recherchez une distribution centrée sur zéro; longue queue indique erreurs extrêmes.')
                         else:
                             fig_hr = px.histogram(residuals.reset_index(), x=0, nbins=40, title='Histogramme des résidus')
                             st.plotly_chart(fig_hr, use_container_width=True)
+                            st.caption('Distribution des résidus — recherchez une distribution centrée sur zéro; longue queue indique erreurs extrêmes.')
 
                         # allow download of diagnostics
                         df_diag_out = df_plot.reset_index()
@@ -590,23 +604,56 @@ try:
                 import json
                 try:
                     import geopandas as gpd
+                    import pydeck as pdk
                     gdf = gpd.read_file(geo_path)
-                    # show bounding box and centroid points
-                    try:
-                        gdf_centroids = gdf.copy()
-                        gdf_centroids['lon'] = gdf_centroids.geometry.centroid.x
-                        gdf_centroids['lat'] = gdf_centroids.geometry.centroid.y
-                        st.map(gdf_centroids[['lat','lon']].dropna())
-                    except Exception:
-                        st.write(gdf)
-                    st.write('GeoJSON chargé via geopandas.')
+                    # convert to GeoJSON dict for pydeck
+                    gj = json.loads(gdf.to_json())
+                    # compute centroid for initial view
+                    centroid = gdf.geometry.centroid.unary_union.centroid
+                    initial_view = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=8)
+                    geo_layer = pdk.Layer(
+                        "GeoJsonLayer",
+                        data=gj,
+                        stroked=True,
+                        filled=True,
+                        get_fill_color=[180, 0, 200, 80],
+                        get_line_color=[0, 0, 0],
+                        pickable=True
+                    )
+                    deck = pdk.Deck(layers=[geo_layer], initial_view_state=initial_view, tooltip={"text": "Béni Mellal-Khénifra region"})
+                    st.pydeck_chart(deck)
+                    st.caption('Limite de la région Béni Mellal-Khénifra affichée (source GeoJSON). Utilisez le zoom pour inspecter les sous-zones.')
                 except Exception:
-                    # fallback: show raw geojson or simple centroid
+                    # fallback: show raw geojson or simple centroid in st.map
                     with open(geo_path, 'r', encoding='utf-8') as f:
                         gj = json.load(f)
-                    st.write('GeoJSON (raw):')
-                    st.json(gj)
-                    st.info('Pour une carte interactive, installez geopandas ou pydeck sur l\'environnement de déploiement.')
+                    # try to extract centroids for display
+                    centroids = []
+                    try:
+                        for feat in gj.get('features', []):
+                            geom = feat.get('geometry', {})
+                            if geom.get('type') == 'Polygon' or geom.get('type') == 'MultiPolygon':
+                                # compute bbox centroid approximately
+                                coords = []
+                                if geom.get('type') == 'Polygon':
+                                    coords = geom.get('coordinates', [[]])[0]
+                                else:
+                                    # MultiPolygon: take first polygon
+                                    coords = geom.get('coordinates', [[[]]])[0][0]
+                                xs = [c[0] for c in coords if isinstance(c, (list, tuple))]
+                                ys = [c[1] for c in coords if isinstance(c, (list, tuple))]
+                                if xs and ys:
+                                    centroids.append({'lat': sum(ys)/len(ys), 'lon': sum(xs)/len(xs)})
+                    except Exception:
+                        centroids = []
+                    if centroids:
+                        import pandas as _pd
+                        st.map(_pd.DataFrame(centroids))
+                        st.caption('Affichage approximatif : centroids des polygones (fallback). Pour une carte polygonale interactive, installez geopandas et pydeck.')
+                    else:
+                        st.write('GeoJSON (raw):')
+                        st.json(gj)
+                        st.info('Pour une carte interactive, installez geopandas et pydeck sur l\'environnement de déploiement.')
             except Exception as e:
                 st.warning(f"Impossible d'afficher le GeoJSON : {e}")
         else:
