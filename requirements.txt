@@ -1,5 +1,8 @@
+# Fichier: requirements.txt
+
 dash
 dash-bootstrap-components
 pandas
 numpy
 plotly
+gunicorn  # <-- Le serveur de production !
