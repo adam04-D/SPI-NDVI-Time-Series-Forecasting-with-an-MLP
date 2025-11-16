@@ -1,0 +1,82 @@
+/* Fichier: assets/custom.css */
+
+/* --- GENERAL BODY STYLING --- */
+body {
+    /* Fond dégradé subtil */
+    background: linear-gradient(135deg, #1a2a3a 0%, #0a111a 100%);
+    color: #e0e0e0; /* Couleur de texte par défaut */
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* --- Barre de Navigation --- */
+/* Le conteneur de la barre latérale */
+.bg-dark {
+    background: #0d1a26 !important; /* Couleur de fond plus spécifique pour la sidebar */
+    box-shadow: 2px 0 5px rgba(0,0,0,0.5); /* Ombre subtile */
+    border-right: 1px solid #2a3d4a;
+}
+
+/* Les liens de navigation */
+.nav-link {
+    color: #a0a0a0 !important; /* Couleur du texte des liens */
+    transition: all 0.2s ease-in-out;
+    border-radius: 5px; /* Coins arrondis */
+    margin-bottom: 5px;
+}
+
+.nav-link:hover {
+    background-color: #2a4050 !important; /* Couleur de fond au survol */
+    color: #ffffff !important; /* Texte blanc au survol */
+}
+
+/* Lien de navigation ACTIF */
+.nav-link.active {
+    background-color: #00bcd4 !important; /* Couleur bleue turquoise pour le lien actif */
+    color: #ffffff !important; /* Texte blanc pour le lien actif */
+    font-weight: bold;
+    box-shadow: 0 2px 5px rgba(0, 188, 212, 0.3);
+}
+
+/* --- Titres --- */
+h1, h2, h3, h4, h5, h6 {
+    color: #e0e0e0; /* Couleur des titres */
+}
+
+/* --- Conteneur principal (à côté de la navigation) --- */
+.dbc {
+    /* Assurez-vous que le contenu a une bonne couleur de fond s'il n'est pas transparent */
+    background-color: transparent; /* Pour laisser le dégradé du body visible */
+}
+
+/* --- Graphiques Plotly --- */
+/* Plotly a ses propres thèmes, mais vous pouvez ajuster les fonds */
+.dash-graph-container {
+    background-color: #1a2a3a !important; /* Fond des graphiques pour le thème sombre */
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+
+/* --- Cartes (Metrics Cards) --- */
+.card {
+    background-color: #1f3040 !important; /* Fond des cartes métriques */
+    border: 1px solid #2a4050;
+    color: #e0e0e0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.card-title {
+    color: #e0e0e0 !important;
+}
+
+/* Pour que les alertes soient visibles */
+.alert {
+    background-color: #2a3d4a !important;
+    color: #e0e0e0 !important;
+    border-color: #4a6a8a !important;
+}
+
+.alert-danger {
+    background-color: #5c3c4c !important; /* Rouge foncé pour les erreurs */
+    border-color: #8c5c6c !important;
+}
